@@ -61,6 +61,33 @@ func Error(ctx context.Context, log *slog.Logger, action, message string, err er
 	)
 }
 
+func InfoX(log *slog.Logger, action, message string) {
+	log.Info(message,
+		"action", action,
+		"hostname", hostname(),
+	)
+}
+
+func ErrorX(log *slog.Logger, action, message string, err error) {
+	if err == nil {
+		log.Error(message,
+			"action", action,
+			"hostname", hostname(),
+		)
+		return
+	}
+
+	log.Error(message,
+		"action", action,
+		"hostname", hostname(),
+		slog.Group("error",
+			"msg", err.Error(),
+			"stack", shortStack(3, 8),
+		),
+	)
+}
+
+
 func shortStack(skip, max int) string {
 	pcs := make([]uintptr, 64)
 	n := runtime.Callers(skip, pcs)

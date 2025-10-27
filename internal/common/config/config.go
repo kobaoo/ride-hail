@@ -10,9 +10,9 @@ import (
 )
 
 type Config struct {
-	DB  DB
-	RMQ RMQ
-	WS  WS
+	DB  *DB
+	RMQ *RMQ
+	WS  *WS
 }
 
 type DB struct {
@@ -40,17 +40,17 @@ func Load(cfgPath string) (*Config, error) {
 		return nil, err
 	}
 	defer f.Close()
-	
+
 	var (
-		lineNo int
-		section string
-		cfg Config
-		seenDB = make(map[string]bool)
-		seenRMQ = make(map[string]bool)
-		seenWS = make(map[string]bool)
-		requiredDB = []string{"host", "port", "user", "password", "database"}
+		lineNo      int
+		section     string
+		cfg         Config
+		seenDB      = make(map[string]bool)
+		seenRMQ     = make(map[string]bool)
+		seenWS      = make(map[string]bool)
+		requiredDB  = []string{"host", "port", "user", "password", "database"}
 		requiredRMQ = []string{"host", "port", "user", "password"}
-		requiredWS = []string{"port"}
+		requiredWS  = []string{"port"}
 	)
 
 	sc := bufio.NewScanner(f)
@@ -62,7 +62,7 @@ func Load(cfgPath string) (*Config, error) {
 		}
 
 		if strings.HasSuffix(line, ":") && !strings.Contains(line, " ") && !strings.Contains("\t", line) {
-			sec := strings.TrimSuffix(line, ":") 
+			sec := strings.TrimSuffix(line, ":")
 			switch sec {
 			case "database", "rabbitmq", "websocket":
 				section = sec

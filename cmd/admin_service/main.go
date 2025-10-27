@@ -21,6 +21,6 @@ func main() {
 		os.Exit(1)
 	}
 	log.Info(ctx, logger, "config_loaded", "Configuration loaded successfully")
-	
+
 	fmt.Println(cfg)
 }

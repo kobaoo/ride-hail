@@ -9,7 +9,10 @@ import (
 	"time"
 
 	"ride-hail/internal/common/config"
+	"ride-hail/internal/common/db"
 	"ride-hail/internal/common/log"
+	"ride-hail/internal/common/rabbitmq"
+	"ride-hail/internal/ride/adapters/repository"
 )
 
 func main() {
@@ -25,7 +28,23 @@ func main() {
 		os.Exit(1)
 	}
 	log.Info(ctx, logger, "config_loaded", "Configuration loaded successfully")
-	
+
+	dbPool, err := db.ConnectPostgres(ctx, cfg.DB)
+	if err != nil {
+		log.Error(ctx, logger, "connect_db_fail", "Failed to connect to database", err)
+		os.Exit(1)
+	}
+
+	rmq := rabbitmq.NewMQ(cfg.RMQ, logger)
+	if err := rmq.Connect(ctx); err != nil {
+		log.Error(ctx, logger, "rmq_connect_fail", "Failed to connect rabbit MQ", err)
+		os.Exit(1)
+	}
+
+	repo := repository.NewRideRepository(dbPool)
+
+	log.Info(ctx, logger, "db_connected", "Successfully connected to database")
+
 	fmt.Println(cfg)
 
 	stop := make(chan os.Signal, 1)
