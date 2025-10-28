@@ -40,8 +40,13 @@ func main() {
 		log.Error(ctx, logger, "rmq_connect_fail", "Failed to connect rabbit MQ", err)
 		os.Exit(1)
 	}
+	if err := rmq.DeclareTopology(); err != nil {
+		log.Error(ctx, logger, "rmq_declare_topology_fail", "Failed to declare RMQ topology", err)
+		os.Exit(1)
+	}
 
-	repo := repository.NewRideRepository(dbPool)
+	_ = repository.NewRideRepository(dbPool)
+	
 
 	log.Info(ctx, logger, "db_connected", "Successfully connected to database")
 

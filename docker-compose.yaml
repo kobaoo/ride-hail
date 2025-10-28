@@ -3,9 +3,9 @@ services:
   ride_db:
     image: postgres:15
     environment:
-      - POSTGRES_DB=ride_hail
-      - POSTGRES_USER=ride_user
-      - POSTGRES_PASSWORD=hog_rider
+      - POSTGRES_DB=ridehail_db
+      - POSTGRES_USER=ridehail_user
+      - POSTGRES_PASSWORD=ridehail_pass
     ports:
       - 5432:5432
     volumes:

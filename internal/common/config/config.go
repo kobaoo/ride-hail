@@ -41,10 +41,14 @@ func Load(cfgPath string) (*Config, error) {
 	}
 	defer f.Close()
 
+	cfg := Config {
+		&DB{},
+		&RMQ{},
+		&WS{},
+	}
 	var (
 		lineNo      int
 		section     string
-		cfg         Config
 		seenDB      = make(map[string]bool)
 		seenRMQ     = make(map[string]bool)
 		seenWS      = make(map[string]bool)
@@ -139,7 +143,7 @@ func Load(cfgPath string) (*Config, error) {
 				if err != nil {
 					return nil, err
 				}
-				cfg.RMQ.Port = p
+				cfg.WS.Port = p
 			default:
 				return nil, fmt.Errorf("line %d: unkown field for [websocket]: %q", lineNo, k)
 			}
