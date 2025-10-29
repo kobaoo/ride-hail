@@ -14,6 +14,7 @@ import (
 	"ride-hail/internal/common/db"
 	"ride-hail/internal/common/log"
 	"ride-hail/internal/common/rabbitmq"
+	"ride-hail/internal/common/ws"
 	"ride-hail/internal/driver_location/adapters/api"
 	"ride-hail/internal/driver_location/adapters/queue"
 	"ride-hail/internal/driver_location/adapters/repository"
@@ -62,11 +63,16 @@ func main() {
 	coreService := app.NewAppService(driverRepo, locationRepo, publisher)
 
 	handler := api.NewHandler(coreService, logger)
+	wsHandler := ws.NewWSHandler(logger)
+
+	mux := http.NewServeMux()
+	mux.HandleFunc("/ws/drivers/", wsHandler.HandleDriverWS)
+	mux.Handle("/", handler.Router()) // existing REST routes
 
 	// Start HTTP server in goroutine
 	server := &http.Server{
 		Addr:    fmt.Sprintf(":%d", 3001),
-		Handler: handler.Router(),
+		Handler: mux,
 	}
 
 	go func() {
