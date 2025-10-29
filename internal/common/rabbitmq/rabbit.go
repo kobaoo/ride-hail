@@ -17,10 +17,10 @@ type ManagerMQ struct {
 	Conn     *amqp.Connection
 	Chan     *amqp.Channel
 	url      string
-	log     *slog.Logger
+	log      *slog.Logger
 	closedCh chan struct{}
-	mu 		 sync.RWMutex
-	alive  bool
+	mu       sync.RWMutex
+	alive    bool
 }
 
 func NewMQ(cfg *config.RMQ, logger *slog.Logger) *ManagerMQ {
@@ -28,8 +28,8 @@ func NewMQ(cfg *config.RMQ, logger *slog.Logger) *ManagerMQ {
 		"amqp://%s:%s@%s:%d/", cfg.User, cfg.Password, cfg.Host, cfg.Port,
 	)
 	return &ManagerMQ{
-		url: url,
-		log: logger,
+		url:      url,
+		log:      logger,
 		closedCh: make(chan struct{}),
 	}
 }
@@ -48,8 +48,8 @@ func (m *ManagerMQ) connectOnce() error {
 
 	conn, err := amqp.DialConfig(m.url, amqp.Config{
 		Heartbeat: 10 * time.Second,
-		Locale: "en_US",
-		Dial: amqp.DefaultDial(10 * time.Second),
+		Locale:    "en_US",
+		Dial:      amqp.DefaultDial(10 * time.Second),
 	})
 
 	if err != nil {
@@ -77,7 +77,7 @@ func (m *ManagerMQ) reconnectLoop(ctx context.Context) {
 	defer ticker.Stop()
 	for {
 		select {
-		case <- ctx.Done():
+		case <-ctx.Done():
 			m.Chan.Close()
 			return
 		case err := <-notifyClose:
@@ -90,8 +90,8 @@ func (m *ManagerMQ) reconnectLoop(ctx context.Context) {
 			for attempt := 0; ; attempt++ {
 				select {
 				case <-ctx.Done():
-					return 
-				case <- ticker.C:
+					return
+				case <-ticker.C:
 					// reconnection each 4 seconds
 				}
 				if e := m.connectOnce(); e != nil {
@@ -104,7 +104,7 @@ func (m *ManagerMQ) reconnectLoop(ctx context.Context) {
 				} else {
 					log.InfoX(m.log, "rmq_reconnection", "Reconnecting to RMQ")
 				}
-			}	
+			}
 		}
 	}
 }
@@ -154,7 +154,10 @@ func (m *ManagerMQ) DeclareTopology() error {
 		return err
 	}
 
-	type qb struct{ q, ex, key string; isFanout bool }
+	type qb struct {
+		q, ex, key string
+		isFanout   bool
+	}
 	for _, b := range []qb{
 		{"ride_requests", "ride_topic", "ride.request.*", false},
 		{"ride_status", "ride_topic", "ride.status.*", false},

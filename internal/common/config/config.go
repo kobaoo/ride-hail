@@ -41,7 +41,7 @@ func Load(cfgPath string) (*Config, error) {
 	}
 	defer f.Close()
 
-	cfg := Config {
+	cfg := Config{
 		&DB{},
 		&RMQ{},
 		&WS{},
