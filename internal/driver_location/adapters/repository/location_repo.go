@@ -2,6 +2,7 @@ package repository
 
 import (
 	"context"
+	"crypto/rand"
 	"fmt"
 	"ride-hail/internal/driver_location/domain"
 	"time"
@@ -17,8 +18,6 @@ func NewLocationRepository(db *pgxpool.Pool) *LocationRepository {
 	return &LocationRepository{db: db}
 }
 
-// SaveLocation updates is_current flags and inserts a new coordinates row.
-// This operation is transactional.
 func (r *LocationRepository) SaveLocation(ctx context.Context, loc domain.LocationUpdate) error {
 	if loc.RecordedAt.IsZero() {
 		loc.RecordedAt = time.Now().UTC()
@@ -28,11 +27,8 @@ func (r *LocationRepository) SaveLocation(ctx context.Context, loc domain.Locati
 	if err != nil {
 		return fmt.Errorf("begin tx: %w", err)
 	}
-	defer func() {
-		_ = tx.Rollback(ctx)
-	}()
+	defer func() { _ = tx.Rollback(ctx) }()
 
-	// mark previous as not current
 	if _, err := tx.Exec(ctx, `
 		UPDATE coordinates
 		SET is_current = false, updated_at = now()
@@ -41,10 +37,18 @@ func (r *LocationRepository) SaveLocation(ctx context.Context, loc domain.Locati
 		return fmt.Errorf("update previous coords: %w", err)
 	}
 
+	id, err := newUUID()
+	if err != nil {
+		return fmt.Errorf("generate uuid: %w", err)
+	}
+
 	_, err = tx.Exec(ctx, `
-		INSERT INTO coordinates (entity_id, entity_type, address, latitude, longitude, is_current, created_at, updated_at)
-		VALUES ($1, 'driver', '', $2, $3, true, now(), now())
-	`, loc.DriverID, loc.Latitude, loc.Longitude)
+		INSERT INTO coordinates (
+			id, entity_id, entity_type, address, latitude, longitude,
+			is_current, created_at, updated_at
+		)
+		VALUES ($1, $2, 'driver', '', $3, $4, true, now(), now())
+	`, id, loc.DriverID, loc.Latitude, loc.Longitude)
 	if err != nil {
 		return fmt.Errorf("insert coordinates: %w", err)
 	}
@@ -53,4 +57,17 @@ func (r *LocationRepository) SaveLocation(ctx context.Context, loc domain.Locati
 		return fmt.Errorf("commit tx: %w", err)
 	}
 	return nil
+}
+
+// newUUID generates a random RFC 4122-compliant UUID v4
+func newUUID() (string, error) {
+	u := make([]byte, 16)
+	if _, err := rand.Read(u); err != nil {
+		return "", fmt.Errorf("rand.Read: %w", err)
+	}
+
+	u[6] = (u[6] & 0x0f) | 0x40
+	u[8] = (u[8] & 0x3f) | 0x80
+
+	return fmt.Sprintf("%x-%x-%x-%x-%x", u[0:4], u[4:6], u[6:8], u[8:10], u[10:]), nil
 }

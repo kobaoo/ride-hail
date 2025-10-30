@@ -169,6 +169,10 @@ func (h *Handler) handleAppError(ctx context.Context, w http.ResponseWriter, err
 	case errors.Is(err, domain.ErrWebSocketSend):
 		log.Warn(ctx, h.logger, "ws_send_fail driver", driverID, err)
 		writeJSONError(ctx, w, http.StatusAccepted, "status updated but ws notification failed")
+	case errors.Is(err, domain.ErrAlreadyOnline):
+		writeJSONError(ctx, w, http.StatusConflict, "driver already online")
+	case errors.Is(err, domain.ErrAlreadyOffline):
+		writeJSONError(ctx, w, http.StatusConflict, "driver already offline")
 	default:
 		log.Error(ctx, h.logger, "internal_error driver", driverID, err)
 		writeJSONError(ctx, w, http.StatusInternalServerError, "internal server error")
