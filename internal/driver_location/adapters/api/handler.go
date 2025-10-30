@@ -49,7 +49,7 @@ func (h *Handler) driversPrefixHandler(w http.ResponseWriter, r *http.Request) {
 	p := strings.TrimPrefix(r.URL.Path, "/drivers/")
 	parts := strings.Split(p, "/")
 	if len(parts) < 2 {
-		http.NotFound(w, r)
+		writeJSONError(ctx, w, http.StatusNotFound, "endpoint not found")
 		return
 	}
 
@@ -59,38 +59,45 @@ func (h *Handler) driversPrefixHandler(w http.ResponseWriter, r *http.Request) {
 	switch {
 	case r.Method == http.MethodPost && action == "online":
 		h.handleGoOnline(ctx, w, r, driverID)
+	case r.Method == http.MethodPost && action == "offline":
+		h.handleGoOffline(ctx, w, r, driverID)
 	default:
-		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		writeJSONError(ctx, w, http.StatusMethodNotAllowed, "method not allowed")
 	}
 }
+
+// -------------------- DRIVER GO ONLINE --------------------
 
 func (h *Handler) handleGoOnline(ctx context.Context, w http.ResponseWriter, r *http.Request, driverID string) {
 	ctx = contextx.WithRequestID(ctx, contextx.GetRequestID(ctx))
 	start := time.Now()
 
+	// --- Auth ---
 	authHeader := r.Header.Get("Authorization")
 	if !strings.HasPrefix(authHeader, "Bearer ") {
-		http.Error(w, "missing bearer token", http.StatusUnauthorized)
+		writeJSONError(ctx, w, http.StatusUnauthorized, "missing bearer token")
 		return
 	}
 	token := strings.TrimPrefix(authHeader, "Bearer ")
 	claims, err := auth.VerifyDriverJWT(token)
 	if err != nil {
-		http.Error(w, "invalid token", http.StatusUnauthorized)
+		writeJSONError(ctx, w, http.StatusUnauthorized, "invalid token")
 		return
 	}
 	if claims.DriverID != driverID {
-		http.Error(w, "forbidden", http.StatusForbidden)
+		writeJSONError(ctx, w, http.StatusForbidden, "forbidden: token does not match driver ID")
 		return
 	}
 
+	// --- Parse body ---
 	var req goOnlineRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		log.Error(ctx, h.logger, "invalid_body", "Unable to decode request body", err)
-		http.Error(w, "invalid JSON body", http.StatusBadRequest)
+		writeJSONError(ctx, w, http.StatusBadRequest, "invalid JSON body")
 		return
 	}
 
+	// --- Core use case ---
 	sessionID, err := h.appService.GoOnline(ctx, driverID, req.Latitude, req.Longitude)
 	if err != nil {
 		h.handleAppError(ctx, w, err, driverID)
@@ -102,27 +109,88 @@ func (h *Handler) handleGoOnline(ctx context.Context, w http.ResponseWriter, r *
 		SessionID: sessionID,
 		Message:   "You are now online and ready to accept rides",
 	}
-	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(resp)
+	writeJSONInfo(ctx, w, http.StatusOK, resp)
 
 	log.Info(ctx, h.logger, "driver_online",
 		fmt.Sprintf("driver=%s duration_ms=%d", driverID, time.Since(start).Milliseconds()))
 }
 
+// -------------------- DRIVER GO OFFLINE --------------------
+
+func (h *Handler) handleGoOffline(ctx context.Context, w http.ResponseWriter, r *http.Request, driverID string) {
+	ctx = contextx.WithRequestID(ctx, contextx.GetRequestID(ctx))
+	start := time.Now()
+
+	authHeader := r.Header.Get("Authorization")
+	if !strings.HasPrefix(authHeader, "Bearer ") {
+		writeJSONError(ctx, w, http.StatusUnauthorized, "missing bearer token")
+		return
+	}
+	token := strings.TrimPrefix(authHeader, "Bearer ")
+	claims, err := auth.VerifyDriverJWT(token)
+	if err != nil {
+		writeJSONError(ctx, w, http.StatusUnauthorized, "invalid token")
+		return
+	}
+	if claims.DriverID != driverID {
+		writeJSONError(ctx, w, http.StatusForbidden, "forbidden: token does not match driver ID")
+		return
+	}
+
+	sessionID, summary, err := h.appService.GoOffline(ctx, driverID)
+	if err != nil {
+		h.handleAppError(ctx, w, err, driverID)
+		return
+	}
+
+	resp := map[string]any{
+		"status":          "OFFLINE",
+		"session_id":      sessionID,
+		"session_summary": summary,
+		"message":         "You are now offline",
+	}
+	writeJSONInfo(ctx, w, http.StatusOK, resp)
+
+	log.Info(ctx, h.logger, "driver_offline",
+		fmt.Sprintf("driver=%s duration_ms=%d", driverID, time.Since(start).Milliseconds()))
+}
+
+// -------------------- ERROR HANDLING --------------------
+
 func (h *Handler) handleAppError(ctx context.Context, w http.ResponseWriter, err error, driverID string) {
 	switch {
 	case errors.Is(err, domain.ErrInvalidCoordinates):
-		http.Error(w, "invalid coordinates", http.StatusBadRequest)
+		writeJSONError(ctx, w, http.StatusBadRequest, "invalid coordinates")
 	case errors.Is(err, domain.ErrInvalidDriverID):
-		http.Error(w, "invalid driver ID", http.StatusBadRequest)
+		writeJSONError(ctx, w, http.StatusBadRequest, "invalid driver ID")
 	case errors.Is(err, domain.ErrPublishFailed):
 		log.Error(ctx, h.logger, "publish_fail driver", driverID, err)
-		http.Error(w, "status publish failed", http.StatusInternalServerError)
+		writeJSONError(ctx, w, http.StatusInternalServerError, "status publish failed")
 	case errors.Is(err, domain.ErrWebSocketSend):
 		log.Warn(ctx, h.logger, "ws_send_fail driver", driverID, err)
-		http.Error(w, "status updated but ws notification failed", http.StatusAccepted)
+		writeJSONError(ctx, w, http.StatusAccepted, "status updated but ws notification failed")
 	default:
 		log.Error(ctx, h.logger, "internal_error driver", driverID, err)
-		http.Error(w, "internal error", http.StatusInternalServerError)
+		writeJSONError(ctx, w, http.StatusInternalServerError, "internal server error")
 	}
+}
+
+// -------------------- RESPONSE HELPERS --------------------
+
+func writeJSONError(ctx context.Context, w http.ResponseWriter, status int, message string) {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(status)
+	resp := map[string]any{
+		"error":      message,
+		"code":       status,
+		"request_id": contextx.GetRequestID(ctx),
+		"timestamp":  time.Now().UTC().Format(time.RFC3339),
+	}
+	_ = json.NewEncoder(w).Encode(resp)
+}
+
+func writeJSONInfo(ctx context.Context, w http.ResponseWriter, status int, payload any) {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(status)
+	_ = json.NewEncoder(w).Encode(payload)
 }

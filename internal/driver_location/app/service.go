@@ -81,3 +81,40 @@ func (a *AppService) GoOnline(ctx context.Context, driverID string, lat, lng flo
 
 	return sessionID, nil
 }
+
+// GoOffline ends the driver's session, updates status, and returns a summary.
+func (a *AppService) GoOffline(ctx context.Context, driverID string) (string, domain.SessionSummary, error) {
+	if driverID == "" {
+		return "", domain.SessionSummary{}, domain.ErrInvalidDriverID
+	}
+
+	// --- stop active session (repository implementation decides behavior) ---
+	sessionID, summary, err := a.driverRepo.EndSession(ctx, driverID)
+	if err != nil {
+		return "", domain.SessionSummary{}, fmt.Errorf("end session: %w", err)
+	}
+
+	// --- update status to OFFLINE ---
+	if err := a.driverRepo.UpdateStatus(ctx, driverID, "OFFLINE"); err != nil {
+		return "", domain.SessionSummary{}, fmt.Errorf("update status: %w", err)
+	}
+
+	// --- publish status event ---
+	if err := a.publisher.PublishStatus(ctx, driverID, "OFFLINE", sessionID); err != nil {
+		return "", domain.SessionSummary{}, fmt.Errorf("%w: %v", domain.ErrPublishFailed, err)
+	}
+
+	// --- send WebSocket notification ---
+	if a.wsPort != nil {
+		msg := map[string]any{
+			"type":    "status_update",
+			"status":  "OFFLINE",
+			"message": "You are now offline",
+		}
+		if err := a.wsPort.SendToDriver(ctx, driverID, msg); err != nil {
+			return sessionID, summary, fmt.Errorf("%w: %v", domain.ErrWebSocketSend, err)
+		}
+	}
+
+	return sessionID, summary, nil
+}

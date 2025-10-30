@@ -50,35 +50,35 @@ func (h *WSHandler) HandleDriverWS(w http.ResponseWriter, r *http.Request) {
 	_, data, err := conn.ReadMessage()
 	if err != nil {
 		h.logger.Warn("ws_auth_timeout_or_fail", "driver_id", driverID, "error", err)
-		conn.WriteJSON(domain.ServerMessage{Type: "error", Message: "auth timeout or failed"})
+		h.sendError(conn, driverID, "auth timeout or failed")
 		return
 	}
 
 	var authMsg domain.AuthMessage
 	if err := json.Unmarshal(data, &authMsg); err != nil {
 		h.logger.Warn("ws_auth_unmarshal_fail", "driver_id", driverID, "error", err)
-		conn.WriteJSON(domain.ServerMessage{Type: "error", Message: "invalid auth message"})
+		h.sendError(conn, driverID, "invalid auth message")
 		return
 	}
 	if authMsg.Type != "auth" || !strings.HasPrefix(authMsg.Token, "Bearer ") {
-		conn.WriteJSON(domain.ServerMessage{Type: "error", Message: "bad auth format"})
+		h.sendError(conn, driverID, "bad auth format")
 		return
 	}
 	tokenStr := strings.TrimPrefix(authMsg.Token, "Bearer ")
 	claims, err := auth.VerifyDriverJWT(tokenStr)
 	if err != nil {
-		conn.WriteJSON(domain.ServerMessage{Type: "error", Message: "invalid token"})
+		h.sendError(conn, driverID, "invalid token")
 		return
 	}
 	if claims.DriverID != driverID {
-		conn.WriteJSON(domain.ServerMessage{Type: "error", Message: "token-driver mismatch"})
+		h.sendError(conn, driverID, "token-driver mismatch")
 		return
 	}
 
 	h.logger.Info("ws_auth_success", "driver_id", driverID)
 	h.hub.Add(driverID, conn)
 	defer h.hub.Remove(driverID)
-	conn.WriteJSON(domain.ServerMessage{Type: "info", Message: "authenticated"})
+	h.sendInfo(conn, driverID, "authenticated")
 
 	const (
 		pingPeriod = 30 * time.Second
@@ -112,5 +112,25 @@ func (h *WSHandler) HandleDriverWS(w http.ResponseWriter, r *http.Request) {
 				h.logger.Info("ws_msg", "driver_id", driverID, "msg", string(msg))
 			}
 		}
+	}
+}
+
+func (h *WSHandler) sendError(conn *websocket.Conn, driverID string, msg string) {
+	serverMsg := domain.ServerMessage{
+		Type:    "error",
+		Message: msg,
+	}
+	if err := conn.WriteJSON(serverMsg); err != nil {
+		h.logger.Error("ws_send_error_fail", "driver_id", driverID, "error", err)
+	}
+}
+
+func (h *WSHandler) sendInfo(conn *websocket.Conn, driverID string, msg string) {
+	serverMsg := domain.ServerMessage{
+		Type:    "info",
+		Message: msg,
+	}
+	if err := conn.WriteJSON(serverMsg); err != nil {
+		h.logger.Error("ws_send_info_fail", "driver_id", driverID, "error", err)
 	}
 }

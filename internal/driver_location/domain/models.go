@@ -42,6 +42,12 @@ type RideRequest struct {
 	CorrelationID string `json:"correlation_id"`
 }
 
+type SessionSummary struct {
+	DurationHours  float64 `json:"duration_hours"`
+	RidesCompleted int     `json:"rides_completed"`
+	Earnings       float64 `json:"earnings"`
+}
+
 type AuthMessage struct {
 	Type  string `json:"type"`
 	Token string `json:"token"`
