@@ -46,8 +46,7 @@ func (h *WSHandler) HandleDriverWS(w http.ResponseWriter, r *http.Request) {
 
 	h.logger.Info("ws_connected", "driver_id", driverID)
 
-	// ---------------- AUTH PHASE ----------------
-	conn.SetReadDeadline(time.Now().Add(5 * time.Second)) // 5-second window for first message
+	conn.SetReadDeadline(time.Now().Add(5 * time.Second))
 	_, data, err := conn.ReadMessage()
 	if err != nil {
 		h.logger.Warn("ws_auth_timeout_or_fail", "driver_id", driverID, "error", err)
@@ -81,7 +80,6 @@ func (h *WSHandler) HandleDriverWS(w http.ResponseWriter, r *http.Request) {
 	defer h.hub.Remove(driverID)
 	conn.WriteJSON(domain.ServerMessage{Type: "info", Message: "authenticated"})
 
-	// ---------------- KEEP-ALIVE PHASE ----------------
 	const (
 		pingPeriod = 30 * time.Second
 		pongWait   = 60 * time.Second

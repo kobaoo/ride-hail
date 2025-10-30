@@ -2,9 +2,13 @@ package app
 
 import (
 	"context"
+	"fmt"
+	"math"
+
 	"ride-hail/internal/driver_location/domain"
 )
 
+// AppService orchestrates the core driver-location use cases.
 type AppService struct {
 	driverRepo   domain.DriverRepository
 	locationRepo domain.LocationRepository
@@ -26,25 +30,42 @@ func NewAppService(
 	}
 }
 
+// GoOnline transitions a driver into AVAILABLE status,
+// starts a new session, saves location, and notifies systems.
 func (a *AppService) GoOnline(ctx context.Context, driverID string, lat, lng float64) (string, error) {
+	if driverID == "" {
+		return "", domain.ErrInvalidDriverID
+	}
+	if math.IsNaN(lat) || math.IsNaN(lng) {
+		return "", domain.ErrInvalidCoordinates
+	}
+	if math.Abs(lat) > 90 || math.Abs(lng) > 180 {
+		return "", domain.ErrInvalidCoordinates
+	}
+	if lat == 0 || lng == 0 {
+		return "", domain.ErrInvalidCoordinates
+	}
 	sessionID, err := a.driverRepo.StartSession(ctx, driverID)
 	if err != nil {
-		return "", err
+		return "", fmt.Errorf("start session: %w", err)
 	}
 
 	if err := a.driverRepo.UpdateStatus(ctx, driverID, "AVAILABLE"); err != nil {
-		return "", err
+		return "", fmt.Errorf("update status: %w", err)
 	}
 
-	if err := a.locationRepo.SaveLocation(ctx, domain.LocationUpdate{
+	loc := domain.LocationUpdate{
 		DriverID:  driverID,
 		Latitude:  lat,
 		Longitude: lng,
-	}); err != nil {
-		return "", err
+	}
+	if err := a.locationRepo.SaveLocation(ctx, loc); err != nil {
+		return "", fmt.Errorf("save location: %w", err)
 	}
 
-	_ = a.publisher.PublishStatus(ctx, driverID, "AVAILABLE", sessionID)
+	if err := a.publisher.PublishStatus(ctx, driverID, "AVAILABLE", sessionID); err != nil {
+		return "", fmt.Errorf("%w: %v", domain.ErrPublishFailed, err)
+	}
 
 	if a.wsPort != nil {
 		msg := map[string]any{
@@ -52,7 +73,10 @@ func (a *AppService) GoOnline(ctx context.Context, driverID string, lat, lng flo
 			"status":  "AVAILABLE",
 			"message": "You are now online and ready to accept rides",
 		}
-		_ = a.wsPort.SendToDriver(ctx, driverID, msg)
+
+		if err := a.wsPort.SendToDriver(ctx, driverID, msg); err != nil {
+			return sessionID, fmt.Errorf("%w: %v", domain.ErrWebSocketSend, err)
+		}
 	}
 
 	return sessionID, nil

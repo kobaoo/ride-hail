@@ -3,6 +3,7 @@ package api
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"strings"
@@ -13,6 +14,7 @@ import (
 	"ride-hail/internal/common/contextx"
 	"ride-hail/internal/common/log"
 	"ride-hail/internal/driver_location/app"
+	"ride-hail/internal/driver_location/domain"
 )
 
 type Handler struct {
@@ -91,8 +93,7 @@ func (h *Handler) handleGoOnline(ctx context.Context, w http.ResponseWriter, r *
 
 	sessionID, err := h.appService.GoOnline(ctx, driverID, req.Latitude, req.Longitude)
 	if err != nil {
-		log.Error(ctx, h.logger, "go_online_fail", "Failed to execute GoOnline use case", err)
-		http.Error(w, "internal error", http.StatusInternalServerError)
+		h.handleAppError(ctx, w, err, driverID)
 		return
 	}
 
@@ -104,5 +105,24 @@ func (h *Handler) handleGoOnline(ctx context.Context, w http.ResponseWriter, r *
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(resp)
 
-	log.Info(ctx, h.logger, "driver_online", fmt.Sprintf("driver=%s duration_ms=%d", driverID, time.Since(start).Milliseconds()))
+	log.Info(ctx, h.logger, "driver_online",
+		fmt.Sprintf("driver=%s duration_ms=%d", driverID, time.Since(start).Milliseconds()))
+}
+
+func (h *Handler) handleAppError(ctx context.Context, w http.ResponseWriter, err error, driverID string) {
+	switch {
+	case errors.Is(err, domain.ErrInvalidCoordinates):
+		http.Error(w, "invalid coordinates", http.StatusBadRequest)
+	case errors.Is(err, domain.ErrInvalidDriverID):
+		http.Error(w, "invalid driver ID", http.StatusBadRequest)
+	case errors.Is(err, domain.ErrPublishFailed):
+		log.Error(ctx, h.logger, "publish_fail driver", driverID, err)
+		http.Error(w, "status publish failed", http.StatusInternalServerError)
+	case errors.Is(err, domain.ErrWebSocketSend):
+		log.Warn(ctx, h.logger, "ws_send_fail driver", driverID, err)
+		http.Error(w, "status updated but ws notification failed", http.StatusAccepted)
+	default:
+		log.Error(ctx, h.logger, "internal_error driver", driverID, err)
+		http.Error(w, "internal error", http.StatusInternalServerError)
+	}
 }
