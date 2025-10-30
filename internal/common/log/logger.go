@@ -108,7 +108,7 @@ func shortStack(skip, max int) string {
 		if i := strings.LastIndex(fn, "."); i >= 0 && i+1 < len(fn) {
 			fn = fn[i+1:]
 		}
-		fmt.Fprintf(&b, "%s %s:%d\n", fn, file, f.Line)
+		fmt.Fprintf(&b, "%s %s:%d ", fn, file, f.Line)
 		count++
 		if count >= max || !more {
 			break

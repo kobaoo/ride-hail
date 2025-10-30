@@ -1,6 +1,8 @@
 package domain
 
-import "context"
+import (
+	"context"
+)
 
 type RideRepository interface {
 	Insert(ctx context.Context, rd *Ride) error
@@ -17,4 +19,13 @@ type Consumer interface {
 	StartDriverResponses(ctx context.Context, handle func(msg DriverResponse) error) error
 	// Location fanout → поток локаций для данного сервиса
 	StartLocationUpdates(ctx context.Context, handle func(msg LocationUpdate) error) error
+}
+
+type RideService interface {
+	Validate(r *RideRequest) error 
+	CalcFare(r *RideRequest) (float64, float64, int)
+	CreateRide(ctx context.Context, fare float64, distance float64, in *RideRequest) (*Ride, error) 
+	// GetRide(ctx context.Context, id string) (*Ride, error)
+	// UpdateRideStatus(ctx context.Context, id string, status RideStatus) (*Ride, error)
+	// EstimateETA(ctx context.Context, id string) (int64, error)
 }

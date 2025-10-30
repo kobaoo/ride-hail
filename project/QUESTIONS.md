@@ -1,18 +1,7 @@
 
 ## Project Setup and Compilation
-### Does the program compile successfully with `go build -o ride-hail-system .`?
-- [ ] Yes
-- [ ] No
-
-### Does the code follow gofumpt formatting standards?
-- [ ] Yes
-- [ ] No
 
 ### Does the program handle runtime errors gracefully without crashing?
-- [ ] Yes
-- [ ] No
-
-### Is the program free of external packages except for pgx/v5, official AMQP client, and Gorilla WebSocket?
 - [ ] Yes
 - [ ] No
 
