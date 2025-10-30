@@ -2,12 +2,14 @@ package ws
 
 import (
 	"encoding/json"
-	"log/slog"
 	"net/http"
-	"ride-hail/internal/common/ws"
-	"ride-hail/internal/driver_location/domain"
 	"strings"
 	"time"
+
+	"log/slog"
+	"ride-hail/internal/common/auth"
+	"ride-hail/internal/common/ws"
+	"ride-hail/internal/driver_location/domain"
 
 	"github.com/gorilla/websocket"
 )
@@ -29,7 +31,6 @@ func NewWSHandler(logger *slog.Logger, hub *ws.Hub) *WSHandler {
 }
 
 func (h *WSHandler) HandleDriverWS(w http.ResponseWriter, r *http.Request) {
-	// URL: /ws/drivers/{driver_id}
 	parts := strings.Split(strings.TrimPrefix(r.URL.Path, "/ws/drivers/"), "/")
 	if len(parts) < 1 || parts[0] == "" {
 		http.Error(w, "missing driver id", http.StatusBadRequest)
@@ -66,11 +67,6 @@ func (h *WSHandler) HandleDriverWS(w http.ResponseWriter, r *http.Request) {
 	h.hub.Add(driverID, conn)
 	defer h.hub.Remove(driverID)
 
-	// start keepalive
-	conn.SetPongHandler(func(appData string) error {
-		return nil
-	})
-
 	ticker := time.NewTicker(30 * time.Second)
 	defer ticker.Stop()
 
@@ -82,7 +78,6 @@ func (h *WSHandler) HandleDriverWS(w http.ResponseWriter, r *http.Request) {
 				return
 			}
 		default:
-			// echo simple received messages
 			_, msg, err := conn.ReadMessage()
 			if err != nil {
 				h.logger.Warn("ws_read_fail", "driver_id", driverID, "error", err)
@@ -95,25 +90,27 @@ func (h *WSHandler) HandleDriverWS(w http.ResponseWriter, r *http.Request) {
 
 func (h *WSHandler) waitForAuth(conn *websocket.Conn, driverID string, result chan<- bool) {
 	defer close(result)
-
-	// wait for the first message
 	_, data, err := conn.ReadMessage()
 	if err != nil {
 		result <- false
 		return
 	}
 
-	var auth domain.AuthMessage
-	if err := json.Unmarshal(data, &auth); err != nil {
+	var authMsg domain.AuthMessage
+	if err := json.Unmarshal(data, &authMsg); err != nil {
 		result <- false
 		return
 	}
-
-	if auth.Type != "auth" || !strings.HasPrefix(auth.Token, "Bearer ") {
+	if authMsg.Type != "auth" || !strings.HasPrefix(authMsg.Token, "Bearer ") {
 		result <- false
 		return
 	}
+	token := strings.TrimPrefix(authMsg.Token, "Bearer ")
 
-	// TODO: later verify JWT here
+	claims, err := auth.VerifyDriverJWT(token)
+	if err != nil || claims.DriverID != driverID {
+		result <- false
+		return
+	}
 	result <- true
 }
