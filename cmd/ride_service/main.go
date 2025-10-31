@@ -2,18 +2,24 @@ package main
 
 import (
 	"context"
+	"fmt"
+	"net/http"
 	"os"
 	"os/signal"
+	"syscall"
+	"time"
+
 	"ride-hail/internal/common/config"
 	"ride-hail/internal/common/db"
 	"ride-hail/internal/common/log"
 	"ride-hail/internal/common/rabbitmq"
-	"ride-hail/internal/ride/adapters/httpadapter"
+	commonws "ride-hail/internal/common/ws"
+
+	api "ride-hail/internal/ride/adapters/httpadapter"
 	"ride-hail/internal/ride/adapters/repository"
-	rabbit "ride-hail/internal/ride/adapters/rmq"
+	queue "ride-hail/internal/ride/adapters/rmq"
+	passengerws "ride-hail/internal/ride/adapters/ws"
 	"ride-hail/internal/ride/app"
-	"syscall"
-	"time"
 )
 
 func main() {
@@ -25,78 +31,64 @@ func main() {
 
 	cfg, err := config.Load("config.yaml")
 	if err != nil {
-		log.Error(ctx, logger, "config_load_fail", "Failed to load config file", err)
+		log.Error(ctx, logger, "config_load_fail", "Failed to load config", err)
 		os.Exit(1)
 	}
-	log.Info(ctx, logger, "config_loaded", "Configuration loaded successfully")
 
 	dbPool, err := db.ConnectPostgres(ctx, cfg.DB)
 	if err != nil {
-		log.Error(ctx, logger, "connect_db_fail", "Failed to connect to database", err)
+		log.Error(ctx, logger, "db_connect_fail", "Failed to connect database", err)
 		os.Exit(1)
 	}
-	log.Info(ctx, logger, "db_connected", "Successfully connected to database")
 
 	rmq := rabbitmq.NewMQ(cfg.RMQ, logger)
 	if err := rmq.Connect(ctx); err != nil {
-		log.Error(ctx, logger, "rmq_connect_fail", "Failed to connect rabbit MQ", err)
+		log.Error(ctx, logger, "rmq_connect_fail", "Failed to connect RabbitMQ", err)
 		os.Exit(1)
 	}
-
 	if err := rmq.DeclareTopology(); err != nil {
-		log.Error(ctx, logger, "rmq_declare_topology_fail", "Failed to declare RMQ topology", err)
+		log.Error(ctx, logger, "rmq_declare_fail", "Failed to declare RMQ topology", err)
 		os.Exit(1)
 	}
-	log.Info(ctx, logger, "rmq_ready", "RabbitMQ connected and topology declared")
 
-	repo     := repository.NewRideRepository(dbPool)
-	pub      := rabbit.NewPublisher(rmq, logger)
-	_ = rabbit.NewConsumer(rmq, logger)
+	hub := commonws.NewHub(logger)
+	passengerWSHandler := passengerws.NewPassengerWSHandler(logger, hub)
+	wsTalker := passengerws.NewTalker(hub)
 
-	// Домашний сервис приложений
-	rideSvc := app.NewRideService(repo, pub)
+	rideRepo := repository.NewRideRepository(dbPool)
+	publisher := queue.NewRidePublisher(rmq, logger)
+	coreService := app.NewAppService(rideRepo, publisher, wsTalker)
 
-	// // --- Старт консьюмеров (фоновые горутины) ---
-	// // Ответы водителей
-	// if err := consumer.StartDriverResponses(ctx, func(m queue.DriverResponse) error {
-	// 	// Пример: если водитель принял — обновим статус
-	// 	if m.Accepted {
-	// 		return rideSrv.UpdateRideStatus(ctx, m.RideID, "ACCEPTED")
-	// 	}
-	// 	// Иначе можно зафиксировать отказ/продолжить матчинг
-	// 	return nil
-	// }); err != nil {
-	// 	log.Error(ctx, logger, "consumer_start_fail", "driver responses consumer failed to start", err)
-	// 	os.Exit(1)
-	// }
+	apiHandler := api.NewHandler(coreService, logger)
 
-	// // Апдейты локаций (fanout)
-	// if err := consumer.StartLocationUpdates(ctx, func(m queue.LocationUpdate) error {
-	// 	// Пример: можно обновлять ETA/координаты в БД и пушить по WS
-	// 	// rideSrv.UpdateDriverLocation(ctx, m)  // если есть такой метод
-	// 	return nil
-	// }); err != nil {
-	// 	log.Error(ctx, logger, "consumer_start_fail", "location updates consumer failed to start", err)
-	// 	os.Exit(1)
-	// }
-	// log.Info(ctx, logger, "consumers_started", "All RMQ consumers started")
+	mux := http.NewServeMux()
+	mux.HandleFunc("/ws/passengers/", passengerWSHandler.HandlePassengerWS)
+	mux.Handle("/", apiHandler.Router())
 
-	httpSrv := httpadapter.NewServer(rideSvc, logger)
+	server := &http.Server{
+		Addr:    fmt.Sprintf(":%d", cfg.WS.Port),
+		Handler: mux,
+	}
 
 	go func() {
-		if err := httpSrv.Start(ctx, ":3000"); err != nil {
-			log.Error(ctx, logger, "http_start_fail", "HTTP server stopped with error", err)
+		log.Info(ctx, logger, "http_start", "Ride service HTTP server started")
+		if err := server.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+			log.Error(ctx, logger, "http_fail", "HTTP server failed", err)
+			cancel()
 		}
 	}()
-	log.Info(ctx, logger, "http_listening", "HTTP server is listening at :3000")
 
-	// --- Graceful shutdown ---
 	stop := make(chan os.Signal, 1)
 	signal.Notify(stop, syscall.SIGINT, syscall.SIGTERM)
-	<-stop
+	select {
+	case <-stop:
+	case <-ctx.Done():
+	}
 
-	log.Info(ctx, logger, "shutdown", "Ride Service shutting down...")
-	cancel()                       // остановим фоновые горутины/HTTP
-	time.Sleep(1 * time.Second)    // короткая пауза на graceful
-	log.Info(ctx, logger, "shutdown_complete", "Service stopped successfully")
+	shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer shutdownCancel()
+	_ = server.Shutdown(shutdownCtx)
+	rmq.Close()
+	dbPool.Close()
+	log.InfoX(logger, "shutdown_complete", "Ride Service stopped")
 }

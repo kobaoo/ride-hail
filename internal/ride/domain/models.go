@@ -1,86 +1,89 @@
 package domain
 
-import "time"
-
-type RideStatus string
-
-const (
-	RideStatusRequested RideStatus = "REQUESTED"
-	RideStatusCancelled RideStatus = "CANCELLED"
+import (
+	"errors"
+	"math"
 )
-
-type RideType string
-
-const (
-	RideTypeEconomy RideType = "ECONOMY"
-	RideTypePremium RideType = "PREMIUM"
-	RideTypeXL      RideType = "XL"
-)
-
-type Ride struct {
-	ID                      string     `json:"id"`
-	RideNumber              string     `json:"ride_number"`
-	PassengerID             string     `json:"passenger_id"`
-	DriverID                *string    `json:"driver_id,omitempty"`
-	VehicleType             string     `json:"vehicle_type"`
-	Status                  string     `json:"status"`
-	Priority                int        `json:"priority"`
-	RequestedAt             time.Time  `json:"requested_at"`
-	MatchedAt               *time.Time `json:"matched_at,omitempty"`
-	ArrivedAt               *time.Time `json:"arrived_at,omitempty"`
-	StartedAt               *time.Time `json:"started_at,omitempty"`
-	CompletedAt             *time.Time `json:"completed_at,omitempty"`
-	CancelledAt             *time.Time `json:"cancelled_at,omitempty"`
-	CancellationReason      *string    `json:"cancellation_reason,omitempty"`
-	EstimatedFare           *float64   `json:"estimated_fare,omitempty"`
-	FinalFare               *float64   `json:"final_fare,omitempty"`
-	PickupCoordinateID      string     `json:"pickup_coordinate_id"`
-	DestinationCoordinateID string     `json:"destination_coordinate_id"`
-	CreatedAt               time.Time  `json:"created_at"`
-	UpdatedAt               time.Time  `json:"updated_at"`
-}
-
-
-type Location struct {
-	Lat float64 `json:"lat"`
-	Lng float64 `json:"lng"`
-}
-
-type DriverResponse struct {
-	RideID                  string   `json:"ride_id"`
-	DriverID                string   `json:"driver_id"`
-	Accepted                bool     `json:"accepted"`
-	EstimatedArrivalMinutes int      `json:"estimated_arrival_minutes"`
-	DriverLocation          Location `json:"driver_location"`
-	EstimatedArrival        string   `json:"estimated_arrival"`
-	CorrelationID           string   `json:"correlation_id"`
-}
-
-type LocationUpdate struct {
-	DriverID  string   `json:"driver_id"`
-	RideID    string   `json:"ride_id"`
-	Location  Location `json:"location"`
-	SpeedKmh  float64  `json:"speed_kmh"`
-	Heading   float64  `json:"heading_degrees"`
-	Timestamp string   `json:"timestamp"`
-}
 
 type RideRequest struct {
-    PassengerID        string  `json:"passenger_id"`
-    PickupLatitude     float64 `json:"pickup_latitude"`
-    PickupLongitude    float64 `json:"pickup_longitude"`
-    PickupAddress      string  `json:"pickup_address"`
-    DestinationLatitude  float64 `json:"destination_latitude"`
-    DestinationLongitude float64 `json:"destination_longitude"`
-    DestinationAddress string  `json:"destination_address"`
-    RideType           string  `json:"ride_type"`
+	PassengerID          string  `json:"passenger_id"`
+	PickupLatitude       float64 `json:"pickup_latitude"`
+	PickupLongitude      float64 `json:"pickup_longitude"`
+	PickupAddress        string  `json:"pickup_address"`
+	DestinationLatitude  float64 `json:"destination_latitude"`
+	DestinationLongitude float64 `json:"destination_longitude"`
+	DestinationAddress   string  `json:"destination_address"`
+	RideType             string  `json:"ride_type"`
+}
+
+func (r *RideRequest) Validate() error {
+	if r.PassengerID == "" {
+		return ErrInvalidRideRequest
+	}
+	if r.PickupLatitude < -90 || r.PickupLatitude > 90 ||
+		r.DestinationLatitude < -90 || r.DestinationLatitude > 90 {
+		return errors.New("invalid latitude")
+	}
+	if r.PickupLongitude < -180 || r.PickupLongitude > 180 ||
+		r.DestinationLongitude < -180 || r.DestinationLongitude > 180 {
+		return errors.New("invalid longitude")
+	}
+	if r.PickupAddress == "" || r.DestinationAddress == "" {
+		return errors.New("addresses required")
+	}
+	return nil
+}
+
+func (r *RideRequest) EstimateFare() (fare float64, distKm float64, durMin int) {
+	distKm = haversineKm(r.PickupLatitude, r.PickupLongitude,
+		r.DestinationLatitude, r.DestinationLongitude)
+	durMin = estimateDurationMin(distKm, 25)
+	base := 500.0
+	perKm := 100.0
+	perMin := 50.0
+	raw := base + perKm*distKm + perMin*float64(durMin)
+	fare = math.Round(raw/10) * 10
+	return
 }
 
 type RideResponse struct {
-    RideID                 string  `json:"ride_id"`
-    RideNumber             string  `json:"ride_number"`
-    Status                 string  `json:"status"`
-    EstimatedFare          float64 `json:"estimated_fare"`
-    EstimatedDurationMinutes int   `json:"estimated_duration_minutes"`
-    EstimatedDistanceKm    float64 `json:"estimated_distance_km"`
+	RideID                   string  `json:"ride_id"`
+	RideNumber               string  `json:"ride_number"`
+	Status                   string  `json:"status"`
+	EstimatedFare            float64 `json:"estimated_fare"`
+	EstimatedDurationMinutes int     `json:"estimated_duration_minutes"`
+	EstimatedDistanceKm      float64 `json:"estimated_distance_km"`
+}
+
+type AuthMessage struct {
+	Type  string `json:"type"`
+	Token string `json:"token"`
+}
+
+type ServerMessage struct {
+	Type    string `json:"type"`
+	Message string `json:"message"`
+}
+
+// --- geometry helpers ---
+func haversineKm(lat1, lon1, lat2, lon2 float64) float64 {
+	const R = 6371.0
+	toRad := func(d float64) float64 { return d * math.Pi / 180 }
+	dLat := toRad(lat2 - lat1)
+	dLon := toRad(lon2 - lon1)
+	a := math.Sin(dLat/2)*math.Sin(dLat/2) +
+		math.Cos(toRad(lat1))*math.Cos(toRad(lat2))*math.Sin(dLon/2)*math.Sin(dLon/2)
+	c := 2 * math.Atan2(math.Sqrt(a), math.Sqrt(1-a))
+	return R * c
+}
+
+func estimateDurationMin(distanceKm, avgSpeedKmh float64) int {
+	if avgSpeedKmh <= 1 {
+		avgSpeedKmh = 25
+	}
+	minutes := distanceKm / avgSpeedKmh * 60
+	if minutes < 1 {
+		minutes = 1
+	}
+	return int(math.Ceil(minutes))
 }

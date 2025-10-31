@@ -2,68 +2,82 @@ package repository
 
 import (
 	"context"
-	"ride-hail/internal/ride/domain"
+	"fmt"
 
-	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
+
+	"ride-hail/internal/ride/domain"
 )
 
-type rideRepo struct {
-	pool *pgxpool.Pool
+type RideRepository struct {
+	db *pgxpool.Pool
 }
 
-func NewRideRepository(pool *pgxpool.Pool) domain.RideRepository {
-	return &rideRepo{pool: pool}
+func NewRideRepository(db *pgxpool.Pool) *RideRepository {
+	return &RideRepository{db: db}
 }
 
-func (r *rideRepo) Insert(ctx context.Context, rd *domain.Ride) error {
-    tx, err := r.pool.Begin(ctx)
-    if err != nil {
-        return err
-    }
-    defer tx.Rollback(ctx)
-    const q = `
+// Create inserts pickup & destination coordinates then the ride row.
+// Returns ride ID (uuid).
+func (r *RideRepository) Create(ctx context.Context, req domain.RideRequest, fare float64, rideNumber string) (string, error) {
+	tx, err := r.db.Begin(ctx)
+	if err != nil {
+		return "", fmt.Errorf("begin tx: %w", err)
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+
+	// Insert pickup coordinate
+	var pickupCoordID string
+	err = tx.QueryRow(ctx, `
+		INSERT INTO coordinates (
+			id, entity_id, entity_type, address, latitude, longitude,
+			created_at, updated_at, is_current
+		)
+		VALUES (gen_random_uuid(), $1, 'passenger', $2, $3, $4, now(), now(), true)
+		RETURNING id
+	`, req.PassengerID, req.PickupAddress, req.PickupLatitude, req.PickupLongitude).Scan(&pickupCoordID)
+	if err != nil {
+		return "", fmt.Errorf("insert pickup coordinate: %w", err)
+	}
+
+	// Insert destination coordinate
+	var destCoordID string
+	err = tx.QueryRow(ctx, `
+		INSERT INTO coordinates (
+			id, entity_id, entity_type, address, latitude, longitude,
+			created_at, updated_at, is_current
+		)
+		VALUES (gen_random_uuid(), $1, 'passenger', $2, $3, $4, now(), now(), true)
+		RETURNING id
+	`, req.PassengerID, req.DestinationAddress, req.DestinationLatitude, req.DestinationLongitude).Scan(&destCoordID)
+	if err != nil {
+		return "", fmt.Errorf("insert destination coordinate: %w", err)
+	}
+
+	// Insert ride referencing coordinates
+	var rideID string
+	err = tx.QueryRow(ctx, `
 		INSERT INTO rides (
 			ride_number,
 			passenger_id,
+			driver_id,
 			vehicle_type,
 			status,
-			estimated_fare
+			requested_at,
+			estimated_fare,
+			pickup_coordinate_id,
+			destination_coordinate_id,
+			created_at, updated_at
 		) VALUES (
-			$1, $2, $3, $4, $5
-		)
-		RETURNING id, created_at, updated_at, requested_at`
-		
-    err = tx.QueryRow(ctx, q, 
-		rd.RideNumber,
-		rd.PassengerID,
-		rd.VehicleType,
-		"REQUESTED",
-		rd.EstimatedFare,
-	).Scan(&rd.ID, &rd.CreatedAt, &rd.UpdatedAt, &rd.RequestedAt)
-    if err != nil {
-        return err
-    }
+			$1, $2, NULL, $3, 'REQUESTED', now(), $4, $5, $6, now(), now()
+		) RETURNING id
+	`, rideNumber, req.PassengerID, req.RideType, fare, pickupCoordID, destCoordID).Scan(&rideID)
+	if err != nil {
+		return "", fmt.Errorf("insert ride: %w", err)
+	}
 
-    return tx.Commit(ctx)
+	if err := tx.Commit(ctx); err != nil {
+		return "", fmt.Errorf("commit: %w", err)
+	}
+	return rideID, nil
 }
-
-func (r *rideRepo) Cancel(ctx context.Context, rideID string, _ domain.RideStatus) error {
-    tx, err := r.pool.Begin(ctx)
-    if err != nil {
-        return err
-    }
-    defer tx.Rollback(ctx)
-
-    const q = `UPDATE rides SET status='CANCELLED', cancelled_at=NOW() WHERE id=$1`
-    ct, err := tx.Exec(ctx, q, rideID)
-    if err != nil {
-        return err
-    }
-    if ct.RowsAffected() == 0 {
-        return pgx.ErrNoRows
-    }
-
-    return tx.Commit(ctx)
-}
-

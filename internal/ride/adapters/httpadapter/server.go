@@ -1,81 +1,86 @@
-package httpadapter
+package api
 
 import (
 	"context"
 	"encoding/json"
 	"net/http"
+	"strings"
 	"time"
 
 	"log/slog"
+	"ride-hail/internal/common/auth"
+	"ride-hail/internal/common/contextx"
 	"ride-hail/internal/common/log"
+	"ride-hail/internal/ride/app"
 	"ride-hail/internal/ride/domain"
 )
 
-type Server struct {
-	svc    domain.RideService
-	log    *slog.Logger
-	server *http.Server
-	mux    *http.ServeMux
+type Handler struct {
+	appService *app.AppService
+	logger     *slog.Logger
 }
 
-func NewServer(svc domain.RideService, log *slog.Logger) *Server {
+func NewHandler(app *app.AppService, lg *slog.Logger) *Handler {
+	return &Handler{appService: app, logger: lg}
+}
+
+func (h *Handler) Router() http.Handler {
 	mux := http.NewServeMux()
-	s := &Server{svc: svc, log: log, mux: mux}
-	mux.HandleFunc("POST /rides", s.handleCreateRide)
-	// mux.HandleFunc("POST /rides/{ride_id}/cancel", s.handleCancelRide)
-	return s
+	mux.HandleFunc("/rides", h.handleCreateRide)
+	return mux
 }
 
-func (s *Server) Start(ctx context.Context, addr string) error {
-	s.server = &http.Server{
-		Addr:              addr,
-		Handler:           s.mux,
-		ReadHeaderTimeout: 5 * time.Second,
-	}
-	go func() {
-		<-ctx.Done()
-		shCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-		defer cancel()
-		_ = s.server.Shutdown(shCtx)
-	}()
-	return s.server.ListenAndServe()
-}
+// POST /rides
+func (h *Handler) handleCreateRide(w http.ResponseWriter, r *http.Request) {
+	ctx := contextx.WithNewRequestID(r.Context())
 
-func (s *Server) handleCreateRide(w http.ResponseWriter, r *http.Request) {
-	ctx := r.Context()
-	rideReq := &domain.RideRequest{}
-	if err := json.NewDecoder(r.Body).Decode(rideReq); err != nil {
-		log.Error(ctx, s.log, "ride_json_decode", "Failed to decode to json", err)
-		w.WriteHeader(http.StatusBadRequest)
+	if r.Method != http.MethodPost {
+		writeJSONError(ctx, w, http.StatusMethodNotAllowed, "method not allowed")
 		return
 	}
-	
-	if err := s.svc.Validate(rideReq); err != nil {
-		log.Error(ctx, s.log, "ride_validation", "Invalid ride request", err)
-		w.WriteHeader(http.StatusBadRequest)
-		json.NewEncoder(w).Encode(map[string]string{"error": err.Error()})
+
+	authHeader := r.Header.Get("Authorization")
+	if !strings.HasPrefix(authHeader, "Bearer ") {
+		writeJSONError(ctx, w, http.StatusUnauthorized, "missing bearer token")
 		return
 	}
-	
-	fare, distance, duration := s.svc.CalcFare(rideReq)
-	ride, err := s.svc.CreateRide(ctx, fare, distance, rideReq)
+	token := strings.TrimPrefix(authHeader, "Bearer ")
+	claims, err := auth.VerifyPassengerJWT(token)
 	if err != nil {
-		log.Error(ctx, s.log, "ride_creation", "Failed to create ride", err)
-		w.WriteHeader(http.StatusInternalServerError)
+		writeJSONError(ctx, w, http.StatusUnauthorized, "invalid token")
 		return
 	}
 
-	rideResp := &domain.RideResponse{
-		RideID: ride.ID,
-		RideNumber: ride.RideNumber,
-		Status: ride.Status,
-		EstimatedFare: fare,
-		EstimatedDurationMinutes: duration,
-		EstimatedDistanceKm: distance,
+	var req domain.RideRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeJSONError(ctx, w, http.StatusBadRequest, "invalid JSON body")
+		return
 	}
-	
-	log.Info(ctx, s.log, "ride_created", "Ride successfully created")
+	req.PassengerID = claims.PassengerID
+
+	rideResp, err := h.appService.CreateRide(ctx, req)
+	if err != nil {
+		writeJSONError(ctx, w, http.StatusInternalServerError, err.Error())
+		return
+	}
+
+	writeJSONInfo(ctx, w, http.StatusCreated, rideResp)
+	log.Info(ctx, h.logger, "ride_created", "ride_id="+rideResp.RideID)
+}
+
+func writeJSONError(ctx context.Context, w http.ResponseWriter, status int, message string) {
 	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(http.StatusCreated)
-	json.NewEncoder(w).Encode(rideResp)
+	w.WriteHeader(status)
+	json.NewEncoder(w).Encode(map[string]any{
+		"error":      message,
+		"code":       status,
+		"request_id": contextx.GetRequestID(ctx),
+		"timestamp":  time.Now().UTC().Format(time.RFC3339),
+	})
+}
+
+func writeJSONInfo(ctx context.Context, w http.ResponseWriter, status int, payload any) {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(status)
+	json.NewEncoder(w).Encode(payload)
 }
