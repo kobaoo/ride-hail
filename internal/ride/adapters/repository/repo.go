@@ -3,7 +3,9 @@ package repository
 import (
 	"context"
 	"fmt"
+	"time"
 
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"ride-hail/internal/ride/domain"
@@ -80,4 +82,35 @@ func (r *RideRepository) Create(ctx context.Context, req domain.RideRequest, far
 		return "", fmt.Errorf("commit: %w", err)
 	}
 	return rideID, nil
+}
+
+func (r *RideRepository) CancelRide(ctx context.Context, rideID, passengerID, reason string) (time.Time, error) {
+	tx, err := r.db.Begin(ctx)
+	if err != nil {
+		return time.Time{}, fmt.Errorf("begin tx: %w", err)
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+
+	var cancelledAt time.Time
+	err = tx.QueryRow(ctx, `
+		UPDATE rides
+		SET status = 'CANCELLED',
+		    cancelled_at = now(),
+		    cancellation_reason = $3,
+		    updated_at = now()
+		WHERE id = $1 AND passenger_id = $2 AND status NOT IN ('COMPLETED', 'CANCELLED')
+		RETURNING cancelled_at
+	`, rideID, passengerID, reason).Scan(&cancelledAt)
+
+	if err != nil {
+		if err == pgx.ErrNoRows {
+			return time.Time{}, domain.ErrRideNotFoundOrInvalidState
+		}
+		return time.Time{}, fmt.Errorf("update cancel: %w", err)
+	}
+
+	if err := tx.Commit(ctx); err != nil {
+		return time.Time{}, fmt.Errorf("commit: %w", err)
+	}
+	return cancelledAt, nil
 }

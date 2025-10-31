@@ -3,6 +3,8 @@ package app
 import (
 	"context"
 	"fmt"
+	"strings"
+	"time"
 
 	"ride-hail/internal/ride/domain"
 )
@@ -57,4 +59,42 @@ func (a *AppService) CreateRide(ctx context.Context, req domain.RideRequest) (*d
 		EstimatedDurationMinutes: dur,
 		EstimatedDistanceKm:      dist,
 	}, nil
+}
+
+func (a *AppService) CancelRide(ctx context.Context, rideID, passengerID, reason string) (map[string]any, error) {
+	if strings.TrimSpace(rideID) == "" {
+		return nil, domain.ErrInvalidRideID
+	}
+	if strings.TrimSpace(passengerID) == "" {
+		return nil, domain.ErrInvalidPassengerID
+	}
+
+	cancelledAt, err := a.rideRepo.CancelRide(ctx, rideID, passengerID, reason)
+	if err != nil {
+		return nil, fmt.Errorf("cancel ride: %w", err)
+	}
+
+	// Publish to RMQ
+	if err := a.publisher.PublishStatus(ctx, rideID, "CANCELLED", passengerID); err != nil {
+		return nil, fmt.Errorf("%w: %v", domain.ErrPublishFailed, err)
+	}
+
+	// Notify via WS
+	if a.wsPort != nil {
+		msg := map[string]any{
+			"type":    "ride_update",
+			"status":  "CANCELLED",
+			"message": "Your ride has been cancelled",
+			"ride_id": rideID,
+		}
+		_ = a.wsPort.SendToPassenger(ctx, passengerID, msg)
+	}
+
+	resp := map[string]any{
+		"ride_id":      rideID,
+		"status":       "CANCELLED",
+		"cancelled_at": cancelledAt.Format(time.RFC3339),
+		"message":      "Ride cancelled successfully",
+	}
+	return resp, nil
 }
