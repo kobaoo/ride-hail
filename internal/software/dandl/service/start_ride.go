@@ -3,13 +3,12 @@ package service
 import (
 	"context"
 	"fmt"
-	"strings"
-	"time"
-
 	"ride-hail/internal/domain/driver"
 	"ride-hail/internal/domain/ride"
 	"ride-hail/internal/general/contracts"
 	"ride-hail/internal/ports"
+	"strings"
+	"time"
 )
 
 // StartRide transitions the ride to IN_PROGRESS and marks the driver BUSY.
@@ -35,6 +34,8 @@ func (service *driverLocationService) StartRide(ctx context.Context, in ports.St
 				return fmt.Errorf("error 3.5 - ride %s updating driver id %s", in.RideID, in.DriverID)
 			}
 			r.DriverID = &in.DriverID
+		} else {
+			return fmt.Errorf("already accepted by another driver")
 		}
 
 		if *r.DriverID != in.DriverID {

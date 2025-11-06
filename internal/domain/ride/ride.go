@@ -140,9 +140,6 @@ func (ride *Ride) Start() error {
 	if ride.DriverID == nil || *ride.DriverID == "" {
 		return ErrNoDriverAssigned
 	}
-	if ride.Status != StatusRequested {
-		return ErrInvalidStatusTransition
-	}
 	now := time.Now().UTC()
 	ride.StartedAt = &now
 	ride.setStatus(StatusInProgress)
