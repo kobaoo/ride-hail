@@ -2,12 +2,11 @@ package ports
 
 import (
 	"context"
-	"time"
-
 	"ride-hail/internal/domain/driver"
 	"ride-hail/internal/domain/geo"
 	"ride-hail/internal/domain/ride"
 	"ride-hail/internal/domain/user"
+	"time"
 )
 
 // UnitOfWork interface is used to manage transactions across multiple repository operations.
@@ -47,6 +46,7 @@ type RideRepository interface {
 	AvgWaitMinutesBetween(ctx context.Context, start, end time.Time) (float64, error)
 	AvgRideDurationMinutesBetween(ctx context.Context, start, end time.Time) (float64, error)
 	HydrateActiveRows(ctx context.Context, offset, limit int) ([]ActiveRideRow, error)
+	UpdateDriverID(ctx context.Context, rideID string, driverID string) error
 }
 
 // RideEventRepository defines the methods for managing ride event data.

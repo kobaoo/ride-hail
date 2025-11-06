@@ -54,17 +54,18 @@ func ConnectRabbitMQ(ctx context.Context, cfg *config.Config, logger *logger.Log
 	return client, nil
 }
 
-// Close gracefully stops the watcher and closes AMQP resources.
 func (client *Client) Close() {
+	client.mu.Lock()
+	defer client.mu.Unlock()
+
+	// Проверяем, не закрыт ли уже
 	select {
 	case <-client.closed:
-		// already closed
+		return
 	default:
 		close(client.closed)
 	}
 
-	// close connection and channel
-	client.mu.Lock()
 	if client.pubChan != nil {
 		_ = client.pubChan.Close()
 		client.pubChan = nil
@@ -73,18 +74,21 @@ func (client *Client) Close() {
 		_ = client.conn.Close()
 		client.conn = nil
 	}
-	client.mu.Unlock()
 
-	// close the confirms channel so any waiters exit cleanly
+	// Перемещаем pubMu внутрь основного мьютекса
 	client.pubMu.Lock()
 	if client.pubConfirms != nil {
-		close(client.pubConfirms)
+		// Проверяем, не закрыт ли уже канал
+		select {
+		case <-client.pubConfirms:
+			// Уже закрыт, ничего не делаем
+		default:
+			close(client.pubConfirms)
+		}
 		client.pubConfirms = nil
 	}
 	client.pubMu.Unlock()
 }
-
-// --- internals ---
 
 // connectOnce tries to connect and set up topology once.
 func (client *Client) connectOnce() error {

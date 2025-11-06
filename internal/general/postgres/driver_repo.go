@@ -5,7 +5,6 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-
 	"ride-hail/internal/domain/driver"
 	"ride-hail/internal/domain/ride"
 	"ride-hail/internal/ports"

@@ -5,10 +5,9 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"time"
-
 	"ride-hail/internal/domain/ride"
 	"ride-hail/internal/ports"
+	"time"
 
 	"github.com/jackc/pgx/v5"
 )
@@ -115,13 +114,37 @@ func (repo *RideRepo) CreateRide(ctx context.Context, ride *ride.Ride) error {
 	return nil
 }
 
+func (repo *RideRepo) UpdateDriverID(ctx context.Context, rideID string, driverID string) error {
+	tx, err := MustTxFromContext(ctx)
+	if err != nil {
+		return err
+	}
+
+	cmdTag, err := tx.Exec(ctx, `
+        UPDATE rides
+        SET driver_id = $2,
+            matched_at = NOW(),
+            updated_at = NOW()
+        WHERE id = $1
+    `, rideID, driverID)
+	if err != nil {
+		return err
+	}
+
+	if cmdTag.RowsAffected() == 0 {
+		return fmt.Errorf("ride %s not found", rideID)
+	}
+
+	return nil
+}
+
 // GetByID fetches a ride by primary key (uuid).
 func (repo *RideRepo) GetByID(ctx context.Context, id string) (*ride.Ride, error) {
 	tx, err := MustTxFromContext(ctx)
 	if err != nil {
 		return nil, err
 	}
-
+	fmt.Println(id)
 	var out ride.Ride
 	var vehicleType, status string
 
@@ -145,7 +168,6 @@ func (repo *RideRepo) GetByID(ctx context.Context, id string) (*ride.Ride, error
 	}
 	out.VehicleType = ride.VehicleType(vehicleType)
 	out.Status = ride.Status(status)
-
 	return &out, nil
 }
 
